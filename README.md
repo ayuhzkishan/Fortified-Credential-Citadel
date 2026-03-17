@@ -1,4 +1,4 @@
-# 🏰 Fortified Credential Citadel
+#  Fortified Credential Citadel
 
 > A bulletproof, local-first credential vault engineered with military-grade cryptography.
 
@@ -10,7 +10,7 @@
 
 ---
 
-## 🔐 What is This?
+##  What is This?
 
 Fortified Credential Citadel is a **local-first, offline password and credential manager** built from the ground up in Java. It stores passwords, API tokens, and secure notes in an encrypted vault file on disk — protected by your master password, and unreadable to anyone who doesn't have it.
 
@@ -18,7 +18,7 @@ No cloud. No telemetry. No third-party servers. **Your data never leaves your ma
 
 ---
 
-## 🧱 Architecture
+##  Architecture
 
 ```
 com.citadel
@@ -38,7 +38,7 @@ com.citadel
 
 ---
 
-## 🛡️ Security Model
+##  Security Model
 
 | Layer | Technology | Purpose |
 |---|---|---|
@@ -51,7 +51,7 @@ The vault file is **never readable without your master password**. Even a byte-b
 
 ---
 
-## 🚀 Getting Started
+##  Getting Started
 
 ### Prerequisites
 - Java 21+
@@ -69,7 +69,7 @@ mvn test
 
 ---
 
-## 📁 Vault File Format
+##  Vault File Format
 
 The encrypted vault is stored as a `.citadel` file. Internally it contains:
 
@@ -81,7 +81,7 @@ The plaintext behind it is a JSON structure containing all credential entries. T
 
 ---
 
-## 🧪 Testing
+##  Testing
 
 Comprehensive JUnit 5 suites cover:
 - ✅ Authentication flows (valid + invalid master passwords)
@@ -91,7 +91,7 @@ Comprehensive JUnit 5 suites cover:
 
 ---
 
-## 📌 Roadmap
+##  Roadmap
 
 - [x] Step 1: Project Setup
 - [ ] Step 2: CryptoException
@@ -110,12 +110,12 @@ Comprehensive JUnit 5 suites cover:
 
 ---
 
-## 👤 Author
+##  Author and Developer
 
 **Ayush Kishan**
 
 ---
 
-## 📄 License
+##  License
 
 MIT License — see [LICENSE](LICENSE)
