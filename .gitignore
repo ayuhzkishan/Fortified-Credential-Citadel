@@ -1,0 +1,69 @@
+# ========================
+# Java / Maven
+# ========================
+target/
+*.class
+*.jar
+*.war
+*.ear
+*.nar
+*.zip
+*.tar.gz
+*.rar
+
+# Maven wrapper
+.mvn/
+mvnw
+mvnw.cmd
+
+# ========================
+# IDE files
+# ========================
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+
+# Eclipse
+.classpath
+.project
+.settings/
+bin/
+
+# VS Code Java
+.vscode/
+.factorypath
+
+# NetBeans
+nbproject/
+build/
+nbbuild/
+dist/
+nbdist/
+.nb-gradle/
+
+# ========================
+# OS Files
+# ========================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ========================
+# Vault / Secrets (CRITICAL - never commit vault data)
+# ========================
+*.citadel
+*.vault
+*.enc
+*.key
+master.key
+vault.json
+
+# ========================
+# Logs
+# ========================
+logs/
+*.log
