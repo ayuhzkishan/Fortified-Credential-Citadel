@@ -1,5 +1,8 @@
 package com.citadel.model;
 
+import com.fasterxml.jackson.annotation.JsonSubTypes;
+import com.fasterxml.jackson.annotation.JsonTypeInfo;
+
 import java.time.Instant;
 import java.util.UUID;
 
@@ -14,6 +17,16 @@ import java.util.UUID;
  *
  * @author Ayush Kishan
  */
+@JsonTypeInfo(
+        use = JsonTypeInfo.Id.NAME,
+        include = JsonTypeInfo.As.PROPERTY,
+        property = "@type"
+)
+@JsonSubTypes({
+        @JsonSubTypes.Type(value = PasswordCredential.class, name = "password"),
+        @JsonSubTypes.Type(value = ApiTokenCredential.class, name = "api_token"),
+        @JsonSubTypes.Type(value = SecureNoteCredential.class, name = "secure_note")
+})
 public interface VaultItem {
 
     /**
@@ -36,6 +49,7 @@ public interface VaultItem {
      *
      * @return A {@link CredentialType} enum value.
      */
+    @com.fasterxml.jackson.annotation.JsonIgnore
     CredentialType getType();
 
     /**

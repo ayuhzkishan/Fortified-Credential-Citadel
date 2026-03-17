@@ -4,8 +4,7 @@ import com.citadel.model.VaultItem;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.jsontype.BasicPolymorphicTypeValidator;
-import com.fasterxml.jackson.databind.jsontype.PolymorphicTypeValidator;
+
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,14 +39,9 @@ public class VaultSerializer {
         // Support for Java 8 Time (Instant)
         mapper.registerModule(new JavaTimeModule());
 
-        // Enable polymorphic type handling for the com.citadel.model package
-        // This embeds class info into the JSON so Jackson knows which subclass to instantiate
-        PolymorphicTypeValidator ptv = BasicPolymorphicTypeValidator.builder()
-                .allowIfBaseType("com.citadel.model")
-                .allowIfSubType("com.citadel.model")
-                .build();
-        
-        mapper.activateDefaultTyping(ptv, ObjectMapper.DefaultTyping.NON_FINAL);
+        // Let Jackson rely entirely on the @JsonTypeInfo and @JsonSubTypes annotations
+        // present on the VaultItem interface. Explicitly activating default typing here
+        // can sometimes conflict with annotation-based polymorphic deserialization.
     }
 
     /**
@@ -60,7 +54,9 @@ public class VaultSerializer {
     public byte[] serialize(List<VaultItem> items) {
         try {
             logger.debug("Serializing {} vault items to JSON...", items.size());
-            String json = mapper.writerWithDefaultPrettyPrinter().writeValueAsString(items);
+            String json = mapper.writerFor(new TypeReference<List<VaultItem>>() {})
+                                .withDefaultPrettyPrinter()
+                                .writeValueAsString(items);
             return json.getBytes(StandardCharsets.UTF_8);
         } catch (JsonProcessingException e) {
             logger.error("Failed to serialize vault items.", e);

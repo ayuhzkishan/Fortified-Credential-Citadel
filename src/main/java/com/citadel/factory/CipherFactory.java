@@ -78,9 +78,9 @@ public class CipherFactory {
 
         try {
             return Cipher.getInstance(transformation, CryptoEngineManager.BC_PROVIDER);
-        } catch (NoSuchAlgorithmException e) {
+        } catch (NoSuchAlgorithmException | javax.crypto.NoSuchPaddingException e) {
             throw new CryptoException(
-                    "Cipher algorithm not available: " + transformation, e);
+                    "Cipher algorithm or padding not available: " + transformation, e);
         } catch (NoSuchProviderException e) {
             throw new CryptoException(
                     "Bouncy Castle provider not found. Ensure CryptoEngineManager is initialised.", e);
