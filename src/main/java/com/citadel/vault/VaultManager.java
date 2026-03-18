@@ -237,6 +237,21 @@ public class VaultManager {
     }
 
     /**
+     * Returns the path to this vault's encrypted file on disk.
+     * Used by the UI to determine whether the vault file already exists.
+     */
+    public Path getVaultPath() {
+        return vaultFilePath;
+    }
+
+    /**
+     * Alias for {@link #deleteItem(UUID)} used by UI layers.
+     */
+    public void removeItem(UUID id) {
+        deleteItem(id);
+    }
+
+    /**
      * Fails fast if a UI or service tries to access credentials while locked.
      */
     private void requireUnlocked() {
