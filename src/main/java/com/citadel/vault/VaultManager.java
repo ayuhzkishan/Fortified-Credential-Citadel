@@ -9,12 +9,11 @@ import com.citadel.model.VaultItem;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.SQLException;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * The primary public API for the Fortified Credential Citadel.
@@ -32,13 +31,10 @@ public class VaultManager {
     private static final Logger logger = LoggerFactory.getLogger(VaultManager.class);
 
     private final Path vaultFilePath;
-    private final AesGcmService aesService;
     private final KeyDerivationService kdfService;
-    private final VaultSerializer serializer;
     private final VaultSessionManager sessionManager;
-
-    // In-memory credential store (only populated while vault is unlocked)
-    private final Map<UUID, VaultItem> activeItems = new ConcurrentHashMap<>();
+    private final SqliteVaultRepository repository;
+    private final VaultStore store;
 
     // We must store the Argon2 salt in plaintext so we can recreate the key later
     private byte[] currentSalt;
@@ -52,37 +48,31 @@ public class VaultManager {
      */
     public VaultManager(Path vaultFilePath, AesGcmService aesService, KeyDerivationService kdfService) {
         this.vaultFilePath = vaultFilePath;
-        this.aesService = aesService;
         this.kdfService = kdfService;
-        this.serializer = new VaultSerializer();
         this.sessionManager = VaultSessionManager.getInstance();
+        this.repository = new SqliteVaultRepository(vaultFilePath, aesService);
+        this.store = new VaultStore();
     }
 
     /**
      * Attempts to unlock the vault file with the provided master password.
      *
      * @param masterPassword The user's password (will be zeroed after derivation).
-     * @throws CryptoException if decryption fails (wrong password or corrupted file).
-     * @throws IOException     if the vault file cannot be read.
+     * @throws Exception if decryption fails (wrong password or corrupted file).
      */
-    public void unlock(char[] masterPassword) throws IOException {
+    public void unlock(char[] masterPassword) throws Exception {
         logger.info("Attempting to unlock vault at: {}", vaultFilePath);
         VaultEventBus.publish(VaultEvent.KEY_DERIVATION_STARTED);
 
-        File file = vaultFilePath.toFile();
-        if (!file.exists()) {
+        if (!Files.exists(vaultFilePath)) {
             throw new IOException("Vault file does not exist: " + vaultFilePath);
         }
 
-        // The file format is: [16 bytes salt] + [12 bytes IV + ciphertext + 16 bytes tag]
-        byte[] fileBytes = Files.readAllBytes(vaultFilePath);
-        if (fileBytes.length < 16 + 12 + 16) {
-            throw new CryptoException("Vault file is too small to be valid.");
-        }
+        // Initialize SQLite repository
+        repository.open();
 
-        // 1. Extract salt
-        this.currentSalt = Arrays.copyOfRange(fileBytes, 0, 16);
-        byte[] encryptedPayload = Arrays.copyOfRange(fileBytes, 16, fileBytes.length);
+        // 1. Load salt from Meta table
+        this.currentSalt = repository.loadSalt();
 
         // 2. Derive key (slow operation)
         byte[] masterKey = null;
@@ -90,22 +80,13 @@ public class VaultManager {
             masterKey = kdfService.deriveKey(masterPassword, currentSalt, 32);
             VaultEventBus.publish(VaultEvent.KEY_DERIVATION_COMPLETED);
 
-            // 3. Decrypt payload
-            logger.debug("Decrypting vault payload...");
-            byte[] jsonBytes = aesService.decrypt(encryptedPayload, masterKey);
+            // 3. Decrypt and load all items into store
+            repository.setMasterKey(masterKey);
+            List<VaultItem> items = repository.loadAll();
+            store.loadAll(items);
 
-            // 4. Deserialize to items
-            List<VaultItem> items = serializer.deserialize(jsonBytes);
-
-            // 5. Populate in-memory map
-            activeItems.clear();
-            items.forEach(item -> activeItems.put(item.getId(), item));
-
-            // 6. Start session
+            // 4. Start session (stores master key in secure memory singleton)
             sessionManager.onUnlocked(masterKey);
-
-            // Zero intermediate buffers
-            Arrays.fill(jsonBytes, (byte) 0);
 
         } catch (CryptoException e) {
             VaultEventBus.publish(VaultEvent.VAULT_ERROR);
@@ -122,74 +103,70 @@ public class VaultManager {
      * Initializes a brand-new, empty vault file with a new password.
      *
      * @param newPassword The new master password.
-     * @throws IOException if the file cannot be written.
+     * @throws Exception if the file cannot be written.
      */
-    public void initializeNewVault(char[] newPassword) throws IOException {
+    public void initializeNewVault(char[] newPassword) throws Exception {
         logger.info("Initializing new vault at: {}", vaultFilePath);
-        File file = vaultFilePath.toFile();
-        if (file.exists()) {
+        
+        // Ensure parent directory exists!
+        Path parent = vaultFilePath.getParent();
+        if (parent != null && !Files.exists(parent)) {
+            Files.createDirectories(parent);
+            logger.debug("Created parent directory: {}", parent);
+        }
+
+        if (Files.exists(vaultFilePath)) {
             throw new IOException("Vault file already exists. Cannot overwrite with new initialization.");
         }
 
+        // Initialize repository
+        repository.open();
+
         // Generate new salt
         this.currentSalt = com.citadel.crypto.Argon2DerivationService.generateSalt();
-        this.activeItems.clear();
+        repository.saveSalt(currentSalt);
 
         // Derive key and start session immediately
         VaultEventBus.publish(VaultEvent.KEY_DERIVATION_STARTED);
         byte[] masterKey = kdfService.deriveKey(newPassword, currentSalt, 32);
         VaultEventBus.publish(VaultEvent.KEY_DERIVATION_COMPLETED);
 
+        repository.setMasterKey(masterKey);
         sessionManager.onUnlocked(masterKey);
-        Arrays.fill(masterKey, (byte) 0); // session manager has its copy
+        Arrays.fill(masterKey, (byte) 0); 
 
-        // Save the empty vault to disk
-        save();
+        // Empty vault is now ready
+        store.clear();
+        logger.info("New vault initialized successfully.");
     }
 
     /**
-     * Saves the current in-memory credentials back to the encrypted vault file.
+     * Saves all in-memory changes back to the encrypted database.
      *
-     * @throws IOException if the disk write fails.
+     * @throws Exception if the write fails.
      */
-    public void save() throws IOException {
+    public void save() throws Exception {
         requireUnlocked();
-        logger.info("Saving vault to disk...");
+        logger.info("Synchronizing vault memory with disk repository...");
         sessionManager.keepAlive();
 
-        byte[] sessionKey = sessionManager.getSessionKey();
-        byte[] jsonBytes = null;
-        byte[] encryptedPayload = null;
+        repository.setMasterKey(sessionManager.getSessionKey());
 
-        try {
-            // 1. Serialize map to JSON bytes
-            jsonBytes = serializer.serialize(new ArrayList<>(activeItems.values()));
-
-            // 2. Encrypt JSON bytes
-            encryptedPayload = aesService.encrypt(jsonBytes, sessionKey);
-
-            // 3. Combine [Salt] + [EncryptedPayload]
-            byte[] fileBytes = new byte[currentSalt.length + encryptedPayload.length];
-            System.arraycopy(currentSalt, 0, fileBytes, 0, currentSalt.length);
-            System.arraycopy(encryptedPayload, 0, fileBytes, currentSalt.length, encryptedPayload.length);
-
-            // 4. Write to disk securely (write to temp file then atomic move is best practice, 
-            // but direct write is used here for brevity; can be hardened later).
-            Files.write(vaultFilePath, fileBytes);
-
-            VaultEventBus.publish(VaultEvent.VAULT_SAVED);
-            logger.info("Vault saved successfully. {} items secured.", activeItems.size());
-
-        } finally {
-            if (jsonBytes != null) Arrays.fill(jsonBytes, (byte) 0);
-            if (encryptedPayload != null) Arrays.fill(encryptedPayload, (byte) 0);
+        // For this Phase 3 version, we simply push all current in-memory items to SQLite.
+        // In a more advanced version, we could track dirty flags to only update what changed.
+        for (VaultItem item : store.findAll()) {
+            repository.upsertItem(item);
         }
+
+        VaultEventBus.publish(VaultEvent.VAULT_SAVED);
+        logger.info("Vault sync complete. {} items secured.", store.size());
     }
 
     /** Locks the vault, sweeping all credentials and keys from memory. */
     public void lock() {
         sessionManager.lock();
-        activeItems.clear();
+        store.clear();
+        repository.setMasterKey(null);
         if (currentSalt != null) {
             Arrays.fill(currentSalt, (byte) 0);
             currentSalt = null;
@@ -197,11 +174,11 @@ public class VaultManager {
         logger.info("Vault Manager cleared all in-memory data.");
     }
 
-    // --- CRUD Operations ---
+    // --- CRUD Operations (Delegated to Store) ---
 
     public void addItem(VaultItem item) {
         requireUnlocked();
-        activeItems.put(item.getId(), item);
+        store.put(item);
         sessionManager.keepAlive();
         VaultEventBus.publish(VaultEvent.VAULT_MODIFIED);
     }
@@ -209,36 +186,37 @@ public class VaultManager {
     public Optional<VaultItem> getItem(UUID id) {
         requireUnlocked();
         sessionManager.keepAlive();
-        return Optional.ofNullable(activeItems.get(id));
+        return store.findById(id);
     }
 
     public void updateItem(VaultItem item) {
         requireUnlocked();
-        if (!activeItems.containsKey(item.getId())) {
-            throw new IllegalArgumentException("Item does not exist in vault: " + item.getId());
-        }
-        activeItems.put(item.getId(), item);
+        store.put(item); // Store handles upsert
         sessionManager.keepAlive();
         VaultEventBus.publish(VaultEvent.VAULT_MODIFIED);
     }
 
     public void deleteItem(UUID id) {
         requireUnlocked();
-        if (activeItems.remove(id) != null) {
+        if (store.remove(id)) {
             sessionManager.keepAlive();
             VaultEventBus.publish(VaultEvent.VAULT_MODIFIED);
+            try {
+                repository.deleteItem(id.toString());
+            } catch (SQLException e) {
+                logger.error("Failed to delete item from repository: {}", id, e);
+            }
         }
     }
 
     public List<VaultItem> getAllItems() {
         requireUnlocked();
         sessionManager.keepAlive();
-        return new ArrayList<>(activeItems.values());
+        return store.findAll();
     }
 
     /**
      * Returns the path to this vault's encrypted file on disk.
-     * Used by the UI to determine whether the vault file already exists.
      */
     public Path getVaultPath() {
         return vaultFilePath;
@@ -251,9 +229,6 @@ public class VaultManager {
         deleteItem(id);
     }
 
-    /**
-     * Fails fast if a UI or service tries to access credentials while locked.
-     */
     private void requireUnlocked() {
         if (sessionManager.isLocked()) {
             throw new IllegalStateException("Vault is locked! Cannot perform operation.");
